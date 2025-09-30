@@ -59,7 +59,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Run it: `uv run python experiments/main.py`
+Run it: `uv run python versions/v1/experiments/main.py`
 
 Key observation: Response content is in `response.message.content[]` where each item has a `type` (usually `"text"`) and the actual text content. We'll need to extract this.
 
@@ -80,7 +80,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     request_id: str
     answer: str
-    model: str
+    provider: str
     elapsed_time: int
 ```
 
@@ -106,7 +106,7 @@ class Provider(ABC):
         pass
 
 class CohereProvider(Provider):
-    name = os.getenv("COHERE_DEFAULT_MODEL", "unknown")
+    name = "cohere"
 
     def chat(self, message: str) -> str:
         co = cohere.ClientV2(api_key=os.getenv("COHERE_API_KEY"))
@@ -140,7 +140,7 @@ app = FastAPI(title="Chat Gateway V1")
 provider = CohereProvider()
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, x_idempotency_key: Annotated[str | None, Header()] = None):
+async def chat(req: ChatRequest, x_request_id: Annotated[str | None, Header()] = None):
     start = time.perf_counter()
     try:
         answer = provider.chat(req.message)
@@ -149,9 +149,9 @@ async def chat(req: ChatRequest, x_idempotency_key: Annotated[str | None, Header
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     return ChatResponse(
-        request_id=x_idempotency_key or str(uuid.uuid4()),
+        request_id=x_request_id or str(uuid.uuid4()),
         answer=answer,
-        model=provider.name,
+        provider=provider.name,
         elapsed_time=elapsed_ms,
     )
 ```
@@ -175,7 +175,7 @@ Server runs at `http://127.0.0.1:8000` with auto-reload and docs at `/docs`.
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" \
-  -H "x-idempotency-key: test-123" \
+  -H "x-request-id: test-123" \
   -d '{"message": "What is FastAPI?"}'
 ```
 
@@ -192,51 +192,30 @@ Response includes:
 Here's the complete technical flow showing backend design patterns:
 
 ```mermaid
-sequenceDiagram
-    participant Client
-    participant FastAPI
-    participant Schemas
-    participant Provider
-    participant Cohere
-
-    rect rgb(245, 248, 252)
-    Note over Client,Schemas: INPUT VALIDATION
-    Client->>+FastAPI: POST /chat + headers
-    FastAPI->>+Schemas: Validate ChatRequest
-
-    alt validation fails
-        Schemas-->>Client: 422 Unprocessable Entity
+graph TB
+    subgraph "FastAPI App"
+        FastAPI["FastAPI<br/>(versions/v1/app/main.py)"]
+        Schemas["Schemas<br/>(versions/v1/app/schemas.py)"]
+        Provider["Provider<br/>(versions/v1/app/provider.py)"]
     end
 
-    Schemas->>-FastAPI: ChatRequest
-    end
+    Client["Client"]
+    Cohere["Cohere API<br/>(External LLM)"]
 
-    rect rgb(252, 245, 252)
-    Note over FastAPI,Cohere: PROVIDER PROCESSING
-    FastAPI->>FastAPI: Start timer
-    FastAPI->>+Provider: chat(message)
-    Provider->>Provider: Initialize Cohere client
-    Provider->>+Cohere: Chat API call
+    Client -->|"POST /chat<br/>+ headers"| FastAPI
+    FastAPI -->|"Validate<br/>ChatRequest"| Schemas
+    Schemas -->|"Valid"| FastAPI
+    FastAPI -->|"chat(message)"| Provider
+    Provider -->|"Chat API call"| Cohere
+    Cohere -->|"Response<br/>object"| Provider
+    Provider -->|"Extract text"| FastAPI
+    FastAPI -->|"200 OK + JSON<br/>(request_id, answer, provider, elapsed_time)"| Client
 
-    alt upstream error
-        Cohere-->>Provider: Error
-        Provider-->>FastAPI: Exception
-        FastAPI-->>Client: 502 Bad Gateway
-    end
-
-    Cohere->>-Provider: Response object
-    Note right of Provider: Extract text from content array
-    Provider->>-FastAPI: answer: str
-    end
-
-    rect rgb(245, 252, 245)
-    Note over FastAPI,Client: RESPONSE BUILDING
-    FastAPI->>FastAPI: Calculate elapsed_ms
-    FastAPI->>+Schemas: Build ChatResponse
-    Note right of Schemas: request_id, answer, model, elapsed_time
-    Schemas->>-FastAPI: ChatResponse
-    FastAPI->>-Client: 200 OK + JSON
-    end
+    style Client fill:#e1f5fe
+    style FastAPI fill:#e1f5fe
+    style Schemas fill:#e1f5fe
+    style Provider fill:#f3e5f5
+    style Cohere fill:#f3e5f5
 ```
 
 **Component Mapping:**
