@@ -11,8 +11,10 @@ class Provider(ABC):
         pass
 
 class CohereProvider(Provider):
-    """Basic test provider that echoes the input message."""
-    name = "cohere-0"
+    """Cohere-backed chat provider that calls the Chat API and
+    returns concatenated text parts from the response."""
+    # Report the actual model used for visibility in responses
+    name = os.getenv("COHERE_DEFAULT_MODEL", "unknown")
 
     def chat(self, message: str) -> str:
         co = cohere.ClientV2(api_key=os.getenv("COHERE_API_KEY"))
@@ -27,3 +29,4 @@ class CohereProvider(Provider):
             if item.type == "text":
                 text_parts.append(item.text)
         return ''.join(text_parts)
+

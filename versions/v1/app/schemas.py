@@ -10,5 +10,4 @@ class ChatResponse(BaseModel):
     answer: str
     model: str
     elapsed_time: int
-    
-    
+

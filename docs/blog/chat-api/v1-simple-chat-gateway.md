@@ -8,7 +8,7 @@ A minimal guide to building a chat API backend with FastAPI and Cohere. This is 
 - Returns response with timing metrics
 
 **Stack:**
-- FastAPI + Cohere SDK + UV + Pydantic
+- FastAPI + Cohere SDK + uv (package manager) + Pydantic
 
 ---
 
@@ -20,17 +20,25 @@ uv init
 uv add "fastapi[standard]" cohere python-dotenv
 ```
 
+Requirements:
+- Python 3.10+ (for `str | None` and `typing.Annotated`)
+- cohere>=5.x (for `ClientV2` and `response.message.content`)
+
 Create `.env`:
 ```bash
 COHERE_API_KEY=your_api_key_here
 COHERE_DEFAULT_MODEL=command-r-plus-08-2024
 ```
 
+Tip:
+- Don’t commit `.env` to version control.
+- This guide uses `uv run` to ensure the environment is activated. If you prefer a venv: `uv venv && source .venv/bin/activate`, then use `python`/`fastapi` directly.
+
 ---
 
 ## Exploring the Cohere API
 
-First, let's see what we're working with. Create `experiments/main.py`:
+First, let's see what we're working with. Create `versions/v1/experiments/main.py`:
 
 ```python
 import os
@@ -51,7 +59,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Run it: `python experiments/main.py`
+Run it: `uv run python experiments/main.py`
 
 Key observation: Response content is in `response.message.content[]` where each item has a `type` (usually `"text"`) and the actual text content. We'll need to extract this.
 
@@ -59,7 +67,7 @@ Key observation: Response content is in `response.message.content[]` where each 
 
 ## Defining the API Contract
 
-Create `app/schemas.py`:
+Create `versions/v1/app/schemas.py`:
 
 ```python
 from pydantic import BaseModel
@@ -76,11 +84,13 @@ class ChatResponse(BaseModel):
     elapsed_time: int
 ```
 
+Note: `user_id` is included now for future per-user context; this minimal version doesn’t use it yet.
+
 ---
 
 ## The Provider Abstraction
 
-Create `app/provider.py`:
+Create `versions/v1/app/provider.py`:
 
 ```python
 import os
@@ -96,7 +106,7 @@ class Provider(ABC):
         pass
 
 class CohereProvider(Provider):
-    name = "cohere-0"
+    name = os.getenv("COHERE_DEFAULT_MODEL", "unknown")
 
     def chat(self, message: str) -> str:
         co = cohere.ClientV2(api_key=os.getenv("COHERE_API_KEY"))
@@ -117,7 +127,7 @@ class CohereProvider(Provider):
 
 ## The FastAPI Gateway
 
-Create `app/main.py`:
+Create `versions/v1/app/main.py`:
 
 ```python
 import time, uuid
@@ -126,7 +136,7 @@ from app.schemas import ChatRequest, ChatResponse
 from app.provider import CohereProvider
 from typing import Annotated
 
-app = FastAPI(title="Chat Gateway V0")
+app = FastAPI(title="Chat Gateway V1")
 provider = CohereProvider()
 
 @app.post("/chat", response_model=ChatResponse)
@@ -146,12 +156,14 @@ async def chat(req: ChatRequest, x_idempotency_key: Annotated[str | None, Header
     )
 ```
 
+Note: This `async` endpoint calls a blocking provider. That’s fine for a minimal demo; we’ll make it non-blocking or run it in a threadpool in a later iteration.
+
 ---
 
 ## Running the Gateway
 
 ```bash
-fastapi dev app/main.py
+uv run fastapi run --app-dir versions/v1 app.main:app --reload
 ```
 
 Server runs at `http://127.0.0.1:8000` with auto-reload and docs at `/docs`.
@@ -168,9 +180,9 @@ curl -X POST http://127.0.0.1:8000/chat \
 ```
 
 Response includes:
-- `request_id`: Your idempotency key (or auto-generated UUID)
+- `request_id`: Your request ID header (or auto-generated UUID)
 - `answer`: Extracted text from Cohere
-- `model`: Provider name
+- `provider`: Provider name
 - `elapsed_time`: Response time in milliseconds
 
 ---
@@ -221,16 +233,16 @@ sequenceDiagram
     Note over FastAPI,Client: RESPONSE BUILDING
     FastAPI->>FastAPI: Calculate elapsed_ms
     FastAPI->>+Schemas: Build ChatResponse
-    Note right of Schemas: request_id, answer,<br/>model, elapsed_time
+    Note right of Schemas: request_id, answer, model, elapsed_time
     Schemas->>-FastAPI: ChatResponse
     FastAPI->>-Client: 200 OK + JSON
     end
 ```
 
 **Component Mapping:**
-- **FastAPI** → `app/main.py` (API layer, routing, timing, error handling)
-- **Schemas** → `app/schemas.py` (Pydantic models for validation & serialization)
-- **Provider** → `app/provider.py` (Abstraction for LLM providers)
+- **FastAPI** → `versions/v1/app/main.py` (API layer, routing, timing, error handling)
+- **Schemas** → `versions/v1/app/schemas.py` (Pydantic models for validation & serialization)
+- **Provider** → `versions/v1/app/provider.py` (Abstraction for LLM providers)
 - **Cohere** → External LLM API
 
 **Key Backend Design Patterns:**
@@ -260,7 +272,7 @@ sequenceDiagram
    ```
 
 5. **Observability**
-   - Request IDs for tracing (idempotency keys)
+   - Request IDs for tracing
    - Performance timing at gateway level
    - Structured responses for monitoring
 

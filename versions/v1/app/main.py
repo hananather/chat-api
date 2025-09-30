@@ -4,7 +4,7 @@ from app.schemas import ChatRequest, ChatResponse
 from app.provider import CohereProvider
 from  typing import Annotated
 
-app = FastAPI(title="Chat Gateway V0")
+app = FastAPI(title="Chat Gateway V1")
 provider = CohereProvider()
 
 
@@ -25,3 +25,4 @@ async def chat(req: ChatRequest, x_idempotency_key: Annotated[str | None, Header
         model=provider.name,
         elapsed_time=elapsed_ms,
     )
+
