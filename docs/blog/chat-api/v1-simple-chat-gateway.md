@@ -92,7 +92,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     request_id: str
     answer: str
-    provider: str
+    model: str
     elapsed_time: int
 ```
 
@@ -254,6 +254,54 @@ graph TB
    - Request IDs for tracing
    - Performance timing at gateway level
    - Structured responses for monitoring
+
+## Request Flow
+
+Here's the step-by-step sequence of a single chat request:
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant FastAPI
+    participant Pydantic
+    participant Provider
+    participant Cohere
+
+    Note over Client,Cohere: Single request lifecycle
+
+    Client->>FastAPI: POST /chat<br/>{message, headers}
+
+    Note over FastAPI,Pydantic: Automatic validation (before function)
+    FastAPI->>Pydantic: Validate request body
+    alt Invalid request
+        Pydantic-->>Client: 422 Validation Error
+    else Valid request
+        Pydantic-->>FastAPI: ChatRequest object
+    end
+
+    Note over FastAPI: Start timer
+
+    FastAPI->>Provider: chat(message)
+
+    Provider->>Cohere: Chat API call
+    Cohere-->>Provider: NonStreamedChatResponse
+
+    Note over Provider: Extract text from content[]
+    Provider-->>FastAPI: Text string
+
+    Note over FastAPI: Build response + calculate elapsed_time
+    FastAPI-->>Client: 200 OK<br/>{request_id, answer, model, elapsed_time}
+```
+
+**Key Steps:**
+1. **Client Request**: HTTP POST with message and optional idempotency key
+2. **Automatic Validation**: Pydantic validates request body before function executes (422 on failure)
+3. **Timer Start**: FastAPI starts performance timer (measures provider call only)
+4. **Provider Call**: FastAPI invokes provider abstraction with message string
+5. **Cohere API**: Provider calls Cohere SDK and receives response object
+6. **Text Extraction**: Provider extracts text from response content array
+7. **Response Building**: FastAPI assembles final JSON with metadata and elapsed time
+8. **Client Response**: Return 200 OK with answer and metrics
 
 ## Summary
 
