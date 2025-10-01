@@ -10,8 +10,6 @@ A minimal guide to building a chat API backend with FastAPI and Cohere. This is 
 **Stack:**
 - FastAPI + Cohere SDK + uv (package manager) + Pydantic
 
----
-
 ## Setup
 
 ```bash
@@ -33,8 +31,6 @@ COHERE_DEFAULT_MODEL=command-r-plus-08-2024
 Tip:
 - Don’t commit `.env` to version control.
 - This guide uses `uv run` to ensure the environment is activated. If you prefer a venv: `uv venv && source .venv/bin/activate`, then use `python`/`fastapi` directly.
-
----
 
 ## Exploring the Cohere API
 
@@ -61,9 +57,26 @@ if __name__ == "__main__":
 
 Run it: `uv run python versions/v1/experiments/main.py`
 
-Key observation: Response content is in `response.message.content[]` where each item has a `type` (usually `"text"`) and the actual text content. We'll need to extract this.
+Output:
+```
+NonStreamedChatResponse(
+    id='...',
+    message=Message_ChatMessage(
+        role='assistant',
+        content=[
+            TextContent(type='text', text='Hello! How can I assist you today?')
+        ],
+        tool_plan='',
+        tool_calls=None,
+        citations=None
+    ),
+    finish_reason='COMPLETE',
+    usage=Usage(billed_units=..., tokens=...),
+    ...
+)
+```
 
----
+Key observation: Response content is in `response.message.content[]` where each item has a `type` (usually `"text"`) and the actual text content. We'll need to extract this.
 
 ## Defining the API Contract
 
@@ -75,7 +88,6 @@ from pydantic import Field
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
-    user_id: str | None = None
 
 class ChatResponse(BaseModel):
     request_id: str
@@ -83,10 +95,6 @@ class ChatResponse(BaseModel):
     provider: str
     elapsed_time: int
 ```
-
-Note: `user_id` is included now for future per-user context; this minimal version doesn’t use it yet.
-
----
 
 ## The Provider Abstraction
 
@@ -123,8 +131,6 @@ class CohereProvider(Provider):
         return ''.join(text_parts)
 ```
 
----
-
 ## The FastAPI Gateway
 
 Create `versions/v1/app/main.py`:
@@ -140,7 +146,7 @@ app = FastAPI(title="Chat Gateway V1")
 provider = CohereProvider()
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, x_request_id: Annotated[str | None, Header()] = None):
+def chat(req: ChatRequest, x_idempotency_key: Annotated[str | None, Header()] = None):
     start = time.perf_counter()
     try:
         answer = provider.chat(req.message)
@@ -149,16 +155,14 @@ async def chat(req: ChatRequest, x_request_id: Annotated[str | None, Header()] =
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     return ChatResponse(
-        request_id=x_request_id or str(uuid.uuid4()),
+        request_id=x_idempotency_key or str(uuid.uuid4()),
         answer=answer,
-        provider=provider.name,
+        model=provider.name,
         elapsed_time=elapsed_ms,
     )
 ```
 
-Note: This `async` endpoint calls a blocking provider. That’s fine for a minimal demo; we’ll make it non-blocking or run it in a threadpool in a later iteration.
-
----
+Note: This is a synchronous endpoint. For production, you'd want to make the provider call non-blocking or run it in a threadpool.
 
 ## Running the Gateway
 
@@ -168,24 +172,20 @@ uv run fastapi run --app-dir versions/v1 app.main:app --reload
 
 Server runs at `http://127.0.0.1:8000` with auto-reload and docs at `/docs`.
 
----
-
 ## Testing the API
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" \
-  -H "x-request-id: test-123" \
+  -H "x-idempotency-key: test-123" \
   -d '{"message": "What is FastAPI?"}'
 ```
 
 Response includes:
-- `request_id`: Your request ID header (or auto-generated UUID)
+- `request_id`: Your idempotency key header (or auto-generated UUID)
 - `answer`: Extracted text from Cohere
-- `provider`: Provider name
+- `model`: Model name
 - `elapsed_time`: Response time in milliseconds
-
----
 
 ## Architecture
 
@@ -254,8 +254,6 @@ graph TB
    - Request IDs for tracing
    - Performance timing at gateway level
    - Structured responses for monitoring
-
----
 
 ## Summary
 

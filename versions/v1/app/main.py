@@ -10,7 +10,7 @@ provider = CohereProvider()
 
 #  x_idempotency_key  = deduplicaiton id 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, x_idempotency_key: Annotated[str | None, Header()] = None ):
+def chat(req: ChatRequest, x_idempotency_key: Annotated[str | None, Header()] = None ):
     start = time.perf_counter()
     try:
         answer = provider.chat(req.message)
